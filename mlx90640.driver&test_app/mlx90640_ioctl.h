@@ -1,0 +1,16 @@
+#ifndef _MLX90640_IOCTL_H_
+#define _MLX90640_IOCTL_H_
+
+#define MLX90640_IOC_MAGIC 0x81
+
+#define MLX90640_IOC_RESET _IO(MLX90640_IOC_MAGIC, 0)                  // 向传感器发送复位命令
+#define MLX90640_IOCP_GET_EEPROM _IOR(MLX90640_IOC_MAGIC, 1, uint16_t) // 调用函数读取EEPROM中的校准数据，然后将数据拷贝出来
+#define MLX90640_IOCV_SET_REFRESHRATE _IO(MLX90640_IOC_MAGIC, 2)       // 设置刷新率
+#define MLX90640_IOCV_GET_REFRESHRATE _IO(MLX90640_IOC_MAGIC, 3)       // 读取测量刷新率
+#define MLX90640_IOCV_SET_RESOLUTION _IO(MLX90640_IOC_MAGIC, 4)        // 设置分辨率
+#define MLX90640_IOCV_GET_RESOLUTION _IO(MLX90640_IOC_MAGIC, 5)        // 读取测量分辨率
+#define MLX90640_IOCV_SET_SUBPAGE_MODE _IO(MLX90640_IOC_MAGIC, 6)      // 设置子页模式，传1是棋盘模式，传0是TV模式
+#define MLX90640_IOCV_GET_SUBPAGE_MODE _IO(MLX90640_IOC_MAGIC, 7)      // 读取子页模式，返回1是棋盘模式，返回0是TV模式
+
+#define MLX90640_IOC_MAXNR 7
+#endif
