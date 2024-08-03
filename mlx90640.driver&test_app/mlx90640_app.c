@@ -18,7 +18,7 @@
 #define EE_MLX90640_SIZE 832
 #define MLX90640FRAME_SIZE 834
 
-#define PRINT_TEMPERATURE_MATRIX 0
+#define PRINT_TEMPERATURE_MATRIX 1
 #define IOCTL_TEST 0
 
 int main(int argc, char **argv)
@@ -33,11 +33,10 @@ int main(int argc, char **argv)
     paramsMLX90640 mlx90640;
     static float mlx90640To[MLX90640_RESULT_SIZE];
     int status;
-
     int fd;
     int i, j;
-
     int mmap_length;
+
     if (argc < 2)
     {
         printf("Usage: %s <device_file>\n", argv[0]);
@@ -73,9 +72,9 @@ int main(int argc, char **argv)
 #endif
 
     status = MLX90640_ExtractParameters(eeMLX90640, &mlx90640);
-
     mmap_length = MLX90640FRAME_SIZE * sizeof(*mlx90640Frame);
     mlx90640Frame = mmap(NULL, mmap_length, PROT_READ, MAP_SHARED, fd, 0);
+
     if (mlx90640Frame == MAP_FAILED)
     {
         printf("can not mmap file %s\n", argv[1]);
@@ -88,9 +87,10 @@ int main(int argc, char **argv)
 
     while (1)
     {
-        mlx90640Frame = mmap(NULL, mmap_length, PROT_READ, MAP_SHARED, fd, 0);
-        if (mlx90640Frame == MAP_FAILED)
+        status = ioctl(fd, MLX90640_IOCV_REFRESH_FRAMEDATA);
+        if (status < MLX90640_NO_ERROR)
         {
+            printf("MLX90640_IOCV_REFRESH_FRAMEDATA error\n");
             goto error;
         }
         printf("patten = %d\n", mlx90640Frame[833]);
@@ -105,7 +105,7 @@ int main(int argc, char **argv)
             {
                 temp = mlx90640To[i * MLX90640_RESULT_SIZE_LENGTH + j];
                 temp_sum = temp_sum + temp;
-                if (temp < 20)
+                if (temp < 25)
                 {
                     printf("%.2f\t", temp);
                 }
@@ -119,7 +119,7 @@ int main(int argc, char **argv)
         printf("Average temperature: %.2f\n", temp_sum / (MLX90640_RESULT_SIZE_WIDTH * MLX90640_RESULT_SIZE_LENGTH));
         temp_sum = 0;
 #endif
-        usleep(62500);
+        // usleep(62500);
     }
 
     munmap(mlx90640Frame, mmap_length);

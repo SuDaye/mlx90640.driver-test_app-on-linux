@@ -41,6 +41,7 @@
 #define MLX90640_READ_ERROR -8
 #define MLX90640_READ_PAGE0 0
 #define MLX90640_READ_PAGE1 1
+#define GET_REFLESH_RATE(RATE) (100 / (0x01 << (RATE)))
 
 /*
  * 总共有两个函数会用到I2C，分别是MLX90640_DumpEE和MLX90640_GetFrameData
@@ -185,6 +186,8 @@ static int ValidateFrameData(uint16_t *frameData)
 
 static int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
 {
+    // 定义变量：dataReady用于检查数据是否准备好，controlRegister1存储控制寄存器的值，
+    // statusRegister存储状态寄存器的值，error用于错误处理，data用于临时存储辅助数据，cnt是计数器
     uint16_t dataReady = 0;
     uint16_t controlRegister1;
     uint16_t statusRegister;
@@ -192,6 +195,8 @@ static int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
     uint16_t data[64];
     uint8_t cnt = 0;
 
+    //  这里更好的办法还没想好
+    //  等待数据准备好
     while (dataReady == 0)
     {
         error = MLX90640_I2CRead(slaveAddr, MLX90640_STATUS_REG, 1, &statusRegister);
@@ -203,49 +208,63 @@ static int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
         dataReady = MLX90640_GET_DATA_READY(statusRegister);
     }
 
+    // 一旦数据准备好，重置状态寄存器
     error = MLX90640_I2CWrite(slaveAddr, MLX90640_STATUS_REG, MLX90640_INIT_STATUS_VALUE);
     if (error == -MLX90640_I2C_NACK_ERROR)
     {
+        // 如果写入失败且返回NACK错误，返回错误代码
         return error;
     }
 
+    // 读取传感器像素数据并存储到 frameData 数组
     error = MLX90640_I2CRead(slaveAddr, MLX90640_PIXEL_DATA_START_ADDRESS, MLX90640_PIXEL_NUM, frameData);
     if (error != MLX90640_NO_ERROR)
     {
+        // 如果读取失败，返回错误代码
         return error;
     }
 
+    // 读取辅助数据（如环境温度等），并存储在临时 data 数组中
     error = MLX90640_I2CRead(slaveAddr, MLX90640_AUX_DATA_START_ADDRESS, MLX90640_AUX_NUM, data);
     if (error != MLX90640_NO_ERROR)
     {
+        // 如果读取失败，返回错误代码
         return error;
     }
 
+    // 读取控制寄存器的值，并将其存储到 frameData 数组的最后一个位置（索引 832）
     error = MLX90640_I2CRead(slaveAddr, MLX90640_CTRL_REG, 1, &controlRegister1);
     frameData[832] = controlRegister1;
-    // frameData[833] = statusRegister & 0x0001;
+
+    // 使用宏 MLX90640_GET_FRAME 从状态寄存器中提取帧信息，并存储到 frameData 数组的索引 833
     frameData[833] = MLX90640_GET_FRAME(statusRegister);
 
     if (error != MLX90640_NO_ERROR)
     {
+        // 如果读取失败，返回错误代码
         return error;
     }
 
+    // 验证辅助数据的有效性
     error = ValidateAuxData(data);
     if (error == MLX90640_NO_ERROR)
     {
+        // 如果验证成功，将辅助数据拷贝到 frameData 数组的指定位置（768-831）
         for (cnt = 0; cnt < MLX90640_AUX_NUM; cnt++)
         {
             frameData[cnt + MLX90640_PIXEL_NUM] = data[cnt];
         }
     }
 
+    // 验证帧数据的有效性
     error = ValidateFrameData(frameData);
     if (error != MLX90640_NO_ERROR)
     {
+        // 如果验证失败，返回错误代码
         return error;
     }
 
+    // 返回帧编号，作为该帧数据的标识符
     return frameData[833];
 }
 
@@ -524,7 +543,7 @@ static long mlx90640_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
     if (_IOC_NR(cmd) > MLX90640_IOC_MAXNR)
         return -ENOTTY; // 检查命令编号
     is_admin = capable(CAP_SYS_ADMIN);
-    printk(KERN_INFO "capable(CAP_SYS_ADMIN):%d\n", is_admin);
+    // printk(KERN_INFO "capable(CAP_SYS_ADMIN):%d\n", is_admin);
     if (_IOC_DIR(cmd) & _IOC_WRITE)
     {
         if (capable(CAP_SYS_ADMIN))
@@ -565,7 +584,7 @@ static long mlx90640_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
         ret = MLX90640_GetRefreshRate(MLX90640_ADDR);
         if (ret != -1)
         {
-            return ret;
+            return GET_REFLESH_RATE(ret);
         }
         printk_mlx90640_retmsg(ret);
         break;
@@ -604,6 +623,29 @@ static long mlx90640_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
         if (ret >= MLX90640_NO_ERROR)
         {
             return ret;
+        }
+        break;
+    case MLX90640_IOCV_REFRESH_FRAMEDATA:
+        // printk(KERN_INFO "ioctl MLX90640_GetFrameData\n");
+        ret = MLX90640_GetFrameData(MLX90640_ADDR, mlx90640_pdev->mlx90640Frame);
+        switch (ret)
+        {
+        case MLX90640_NO_ANSWER:
+            printk(KERN_INFO "MLX90640_NO_ANSWER\n");
+            break;
+        case MLX90640_READ_ERROR:
+            printk(KERN_INFO "MLX90640_READ_ERROR\n");
+            break;
+        case MLX90640_READ_PAGE0:
+            printk(KERN_INFO "MLX90640_READ_PAGE0\n");
+            break;
+        case MLX90640_READ_PAGE1:
+            printk(KERN_INFO "MLX90640_READ_PAGE1\n");
+            break;
+        default:
+            printk_mlx90640_retmsg(ret);
+            return -EIO;
+            break;
         }
         break;
     // 参数无效时，虽然前面做了cmd的检查，应该不会发生
@@ -716,11 +758,16 @@ static int mlx90640_i2c_probe(struct i2c_client *client, const struct i2c_device
     if (!mlx90640.mlx90640Frame)
     {
         pr_err("Failed to allocate memory for mlx90640Frame\n");
+        kfree(mlx90640.eeMLX90640);
         return -ENOMEM;
     }
 
     // printk("Here is the mlx90640_i2c_probe function.\n");
-    mlx90640_i2c_init(&mlx90640, MLX90640_REFRESHRATE_16HZ);
+    ret = mlx90640_i2c_init(&mlx90640, MLX90640_REFRESHRATE_16HZ);
+    if (ret < 0)
+    {
+        goto i2c_init_error;
+    }
 
     /* 1、构建设备号 */
     if (mlx90640.major)
@@ -729,8 +776,7 @@ static int mlx90640_i2c_probe(struct i2c_client *client, const struct i2c_device
         ret = register_chrdev_region(mlx90640.devid, MLX90640_CNT, MLX90640_NAME);
         if (ret < 0)
         {
-            pr_err("Failed to register chrdev region\n");
-            return ret;
+            goto cdev_register_error;
         }
     }
     else
@@ -738,8 +784,7 @@ static int mlx90640_i2c_probe(struct i2c_client *client, const struct i2c_device
         ret = alloc_chrdev_region(&mlx90640.devid, 0, MLX90640_CNT, MLX90640_NAME);
         if (ret < 0)
         {
-            pr_err("Failed to allocate chrdev region\n");
-            return ret;
+            goto cdev_register_error;
         }
         mlx90640.major = MAJOR(mlx90640.devid);
     }
@@ -771,14 +816,17 @@ static int mlx90640_i2c_probe(struct i2c_client *client, const struct i2c_device
     printk("MLX90640 I2C driver initialized successfully\n");
     return 0;
 
-cdev_add_error:
-    cdev_del(&mlx90640.cdev);
-    unregister_chrdev_region(mlx90640.devid, MLX90640_CNT);
-    return ret;
 device_create_error:
     device_destroy(mlx90640.class, mlx90640.devid);
 class_create_error:
     class_destroy(mlx90640.class);
+cdev_add_error:
+    cdev_del(&mlx90640.cdev);
+cdev_register_error:
+    unregister_chrdev_region(mlx90640.devid, MLX90640_CNT);
+i2c_init_error:
+    kfree(mlx90640.eeMLX90640);
+    kfree(mlx90640.mlx90640Frame);
     return ret;
 }
 
@@ -787,6 +835,7 @@ static int mlx90640_i2c_remove(struct i2c_client *client)
     /* kfree申请的内存 */
     kfree(mlx90640.eeMLX90640);
     kfree(mlx90640.mlx90640Frame);
+
     /* 删除设备 */
     cdev_del(&mlx90640.cdev);
     unregister_chrdev_region(mlx90640.devid, MLX90640_CNT);
