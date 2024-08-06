@@ -9,8 +9,8 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdint.h>
-#include "mlx90640_ioctl.h"
-#include "MLX90640_API.h"
+#include "include/mlx90640_ioctl.h"
+#include "include/MLX90640_API.h"
 
 #define MLX90640_RESULT_SIZE 768
 #define MLX90640_RESULT_SIZE_WIDTH 24

@@ -26,8 +26,8 @@
 #include <asm/uaccess.h>
 #include <asm/io.h>
 #include <asm/pgtable.h>
-#include "MLX90640_API.h"
-#include "mlx90640_ioctl.h"
+#include "include/MLX90640_API.h"
+#include "include/mlx90640_ioctl.h"
 
 #define MLX90640_ADDR 0x33
 
