@@ -98,6 +98,8 @@ int main(int argc, char **argv)
         tr = Ta - 8.0;
         MLX90640_CalculateTo(mlx90640Frame, &mlx90640, emissivity, tr, mlx90640To);
 #if PRINT_TEMPERATURE_MATRIX
+        // 清屏
+        printf("\033[2J");
         for (i = 0; i < MLX90640_RESULT_SIZE_WIDTH; i++)
         {
             printf("|");
@@ -105,7 +107,7 @@ int main(int argc, char **argv)
             {
                 temp = mlx90640To[i * MLX90640_RESULT_SIZE_LENGTH + j];
                 temp_sum = temp_sum + temp;
-                if (temp < 25)
+                if (temp < 20)
                 {
                     printf("%.2f\t", temp);
                 }
@@ -117,6 +119,10 @@ int main(int argc, char **argv)
             printf("|\n\n");
         }
         printf("Average temperature: %.2f\n", temp_sum / (MLX90640_RESULT_SIZE_WIDTH * MLX90640_RESULT_SIZE_LENGTH));
+        // 清屏
+        printf("\033[2J");
+        // 光标移动到左上角
+        printf("\033[H");
         temp_sum = 0;
 #endif
         // usleep(62500);

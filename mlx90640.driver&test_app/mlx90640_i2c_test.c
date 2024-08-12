@@ -37,11 +37,12 @@
 #define MLX90640_CNT 1
 #define MLX90640_NAME "mlx90640"
 
+#define MLX90640_NO_DATA_READY 1
 #define MLX90640_NO_ANSWER -1
 #define MLX90640_READ_ERROR -8
 #define MLX90640_READ_PAGE0 0
 #define MLX90640_READ_PAGE1 1
-#define GET_REFLESH_RATE(RATE) (100 / (0x01 << (RATE)))
+#define GET_REFLESH_RATE(RATE) ((0x01 << (RATE - 1)))
 
 /*
  * 总共有两个函数会用到I2C，分别是MLX90640_DumpEE和MLX90640_GetFrameData
@@ -77,6 +78,16 @@ static void MLX90640_GetTemperatureMap(void)
     MLX90640_CalculateTo(mlx90640Frame, &mlx90640, emissivity, tr, mlx90640To);
 }*/
 
+static int debug = 0;
+module_param(debug, int, 0644);
+MODULE_PARM_DESC(debug, "enable debug information\n");
+
+#define dprintk(args...)        \
+    if (debug)                  \
+    {                           \
+        printk(KERN_INFO args); \
+    }
+
 struct i2c_driver_test
 {
     struct i2c_client *client;
@@ -109,18 +120,18 @@ static void printk_mlx90640_retmsg(int ret)
     {
     //-1表示设备未应答
     case -1:
-        printk("MLX90640 device didn't answer.\n");
+        dprintk("MLX90640 device didn't answer.\n");
         break;
     //-2表示重新读取后发现不是预期的值。
     case -2:
-        printk("The value was not the expected value after the re-read.\n");
+        dprintk("The value was not the expected value after the re-read.\n");
         break;
     // -8读取异常（最可能的情况是读取速率太低了）
     case -8:
-        printk("Read exception (most likely the read rate is too low).\n");
+        dprintk("Read exception (most likely the read rate is too low).\n");
         break;
     default:
-        printk("An unknown error occurred: %d\n", ret);
+        dprintk("An unknown error occurred: %d\n", ret);
         break;
     }
 }
@@ -194,9 +205,11 @@ static int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
     int error = 1;
     uint16_t data[64];
     uint8_t cnt = 0;
+    int refresh_time;
 
-    //  这里更好的办法还没想好
+    /* 判断传感器状态应该还有更好的办法 */
     //  等待数据准备好
+    refresh_time = 1000 / GET_REFLESH_RATE(mlx90640.RefreshRate);
     while (dataReady == 0)
     {
         error = MLX90640_I2CRead(slaveAddr, MLX90640_STATUS_REG, 1, &statusRegister);
@@ -204,15 +217,23 @@ static int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
         {
             return error;
         }
-        // dataReady = statusRegister & 0x0008;
+        // // dataReady = statusRegister & 0x0008;
         dataReady = MLX90640_GET_DATA_READY(statusRegister);
+        // 根据帧率计算休眠时间，避免过多占用资源
+        msleep(refresh_time);
+        cnt++;
+        dprintk("cnt = %d, REFLESH_RATE=%d, mlx90640.RefreshRate=0x%hX\n", cnt, GET_REFLESH_RATE(mlx90640.RefreshRate), mlx90640.RefreshRate);
+        if (cnt > GET_REFLESH_RATE(mlx90640.RefreshRate)) // 1000 ms 内未得到数据返回错误代码,但好像会直接返回
+        {
+            dprintk(KERN_WARNING "cant get data from sensor\n");
+            return -MLX90640_NO_DATA_READY;
+        }
     }
 
     // 一旦数据准备好，重置状态寄存器
     error = MLX90640_I2CWrite(slaveAddr, MLX90640_STATUS_REG, MLX90640_INIT_STATUS_VALUE);
     if (error == -MLX90640_I2C_NACK_ERROR)
     {
-        // 如果写入失败且返回NACK错误，返回错误代码
         return error;
     }
 
@@ -220,15 +241,13 @@ static int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
     error = MLX90640_I2CRead(slaveAddr, MLX90640_PIXEL_DATA_START_ADDRESS, MLX90640_PIXEL_NUM, frameData);
     if (error != MLX90640_NO_ERROR)
     {
-        // 如果读取失败，返回错误代码
         return error;
     }
 
-    // 读取辅助数据（如环境温度等），并存储在临时 data 数组中
+    // 读取辅助数据（如环境温度等）
     error = MLX90640_I2CRead(slaveAddr, MLX90640_AUX_DATA_START_ADDRESS, MLX90640_AUX_NUM, data);
     if (error != MLX90640_NO_ERROR)
     {
-        // 如果读取失败，返回错误代码
         return error;
     }
 
@@ -241,7 +260,6 @@ static int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
 
     if (error != MLX90640_NO_ERROR)
     {
-        // 如果读取失败，返回错误代码
         return error;
     }
 
@@ -260,11 +278,10 @@ static int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
     error = ValidateFrameData(frameData);
     if (error != MLX90640_NO_ERROR)
     {
-        // 如果验证失败，返回错误代码
         return error;
     }
 
-    // 返回帧编号，作为该帧数据的标识符
+    // 返回帧编号，作为该帧数据的标识符，即子页1还是子页2
     return frameData[833];
 }
 
@@ -285,7 +302,7 @@ static int MLX90640_I2CGeneralReset(uint16_t *eeMLX90640)
     ret = i2c_transfer(client->adapter, &msg, 1);
     if (ret < 0)
     {
-        printk("send reset message error, i2c_transfer returned: %d", ret);
+        dprintk("send reset message error, i2c_transfer returned: %d", ret);
         return ret;
     }
     if (eeMLX90640)
@@ -321,9 +338,9 @@ static int MLX90640_I2CRead(uint8_t slaveAddr, uint16_t startAddress, uint16_t n
     msgs[1].buf = tmp;
     buf[0] = startAddress >> 8;
     buf[1] = startAddress & 0xFF;
-    // printk("data1: %x\n", *data);
+    // dprintk( "data1: %x\n", *data);
     ret = i2c_transfer(client->adapter, msgs, 2);
-    // printk("ret: %d\n", ret);
+    // dprintk( "ret: %d\n", ret);
     if (ret < 0)
     {
         kfree(tmp);
@@ -335,7 +352,7 @@ static int MLX90640_I2CRead(uint8_t slaveAddr, uint16_t startAddress, uint16_t n
     {
         data[i] = (tmp[2 * i] << 8) | tmp[2 * i + 1];
     }
-    // printk("data1: %x\n", *data);
+    // dprintk( "data1: %x\n", *data);
     kfree(tmp);
     return 0;
 }
@@ -472,15 +489,15 @@ static int MLX90640_SetSubpageMode(uint8_t slaveAddr, int modenumber)
     switch (modenumber)
     {
     case 0:
-        printk("Set subpage TV mode\n");
+        dprintk("Set subpage TV mode\n");
         ret = MLX90640_SetInterleavedMode(slaveAddr);
         break;
     case 1:
-        printk("Set subpage chess mode\n");
+        dprintk("Set subpage chess mode\n");
         ret = MLX90640_SetChessMode(slaveAddr);
         break;
     default:
-        printk("Invalid mode number\n");
+        dprintk("Invalid mode number\n");
         return -1;
     }
     printk_mlx90640_retmsg(ret);
@@ -508,7 +525,7 @@ static int mlx90640_i2c_open(struct inode *inode, struct file *file)
 {
     struct mlx90640_dev *mlx90640_pdev;
     mlx90640_pdev = container_of(inode->i_cdev, struct mlx90640_dev, cdev);
-    printk(KERN_DEBUG "mlx90640_i2c_open\n");
+    dprintk("mlx90640_i2c_open\n");
     file->private_data = mlx90640_pdev;
     return 0;
 }
@@ -543,12 +560,12 @@ static long mlx90640_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
     if (_IOC_NR(cmd) > MLX90640_IOC_MAXNR)
         return -ENOTTY; // 检查命令编号
     is_admin = capable(CAP_SYS_ADMIN);
-    // printk(KERN_INFO "capable(CAP_SYS_ADMIN):%d\n", is_admin);
+    // dprintk( "capable(CAP_SYS_ADMIN):%d\n", is_admin);
     if (_IOC_DIR(cmd) & _IOC_WRITE)
     {
         if (capable(CAP_SYS_ADMIN))
         {
-            printk(KERN_WARNING "Non-admin user attempted write operation.\n");
+            dprintk(KERN_WARNING "Non-admin user attempted write operation.\n");
             return -EPERM; // 返回权限不足错误
         }
     }
@@ -556,22 +573,22 @@ static long mlx90640_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
     switch (cmd)
     {
     case MLX90640_IOC_RESET:
-        printk(KERN_INFO "ioctl:mlx90640 reset\n");
+        dprintk("ioctl:mlx90640 reset\n");
         ret = MLX90640_I2CGeneralReset(mlx90640_pdev->eeMLX90640);
         break;
     case MLX90640_IOCP_GET_EEPROM:
-        printk(KERN_INFO "ioctl get EEPROM through pointer\n");
+        dprintk("ioctl get EEPROM through pointer\n");
         // 将数组从内核空间复制到用户空间
         ret = copy_to_user((void __user *)arg, mlx90640_pdev->eeMLX90640, sizeof(uint16_t) * EE_MLX90640_SIZE);
         if (ret != 0)
         {
-            printk(KERN_INFO "Copy Failed--amount=%d\n", ret);
+            dprintk("Copy Failed--amount=%d\n", ret);
             return -EFAULT; // 复制失败
         }
         break;
     // 设置与获取刷新率
     case MLX90640_IOCV_SET_REFRESHRATE:
-        printk(KERN_INFO "ioctl MLX90640_SetRefreshRate\n");
+        dprintk("ioctl MLX90640_SetRefreshRate\n");
         ret = MLX90640_SetRefreshRate(MLX90640_ADDR, arg);
         if (ret < MLX90640_NO_ERROR)
         {
@@ -580,7 +597,7 @@ static long mlx90640_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
         }
         break;
     case MLX90640_IOCV_GET_REFRESHRATE:
-        printk(KERN_INFO "ioctl MLX90640_GetRefreshRate\n");
+        dprintk("ioctl MLX90640_GetRefreshRate\n");
         ret = MLX90640_GetRefreshRate(MLX90640_ADDR);
         if (ret != -1)
         {
@@ -590,7 +607,7 @@ static long mlx90640_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
         break;
     // 设置和读取分辨率
     case MLX90640_IOCV_SET_RESOLUTION:
-        printk(KERN_INFO "ioctl MLX90640_SetResolution\n");
+        dprintk("ioctl MLX90640_SetResolution\n");
         ret = MLX90640_SetResolution(MLX90640_ADDR, arg);
         if (ret < MLX90640_NO_ERROR)
         {
@@ -599,7 +616,7 @@ static long mlx90640_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
         }
         break;
     case MLX90640_IOCV_GET_RESOLUTION:
-        printk(KERN_INFO "ioctl MLX90640_GetCurResolution\n");
+        dprintk("ioctl MLX90640_GetCurResolution\n");
         ret = MLX90640_GetCurResolution(MLX90640_ADDR);
         if (ret != -1)
         {
@@ -609,7 +626,7 @@ static long mlx90640_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
         break;
     // 设置与读取子页模式（一般使用棋盘模式，默认也是棋盘模式）
     case MLX90640_IOCV_SET_SUBPAGE_MODE:
-        printk(KERN_INFO "ioctl MLX90640_SetSubpageMode\n");
+        dprintk("ioctl MLX90640_SetSubpageMode\n");
         ret = MLX90640_SetSubpageMode(MLX90640_ADDR, arg);
         if (ret < MLX90640_NO_ERROR)
         {
@@ -618,7 +635,7 @@ static long mlx90640_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
         }
         break;
     case MLX90640_IOCV_GET_SUBPAGE_MODE:
-        printk(KERN_INFO "ioctl MLX90640_SetSubpageMode\n");
+        dprintk("ioctl MLX90640_SetSubpageMode\n");
         ret = MLX90640_GetSubpageMode(MLX90640_ADDR);
         if (ret >= MLX90640_NO_ERROR)
         {
@@ -626,21 +643,21 @@ static long mlx90640_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
         }
         break;
     case MLX90640_IOCV_REFRESH_FRAMEDATA:
-        // printk(KERN_INFO "ioctl MLX90640_GetFrameData\n");
+        // dprintk(  "ioctl MLX90640_GetFrameData\n");
         ret = MLX90640_GetFrameData(MLX90640_ADDR, mlx90640_pdev->mlx90640Frame);
         switch (ret)
         {
         case MLX90640_NO_ANSWER:
-            printk(KERN_INFO "MLX90640_NO_ANSWER\n");
+            dprintk("MLX90640_NO_ANSWER\n");
             break;
         case MLX90640_READ_ERROR:
-            printk(KERN_INFO "MLX90640_READ_ERROR\n");
+            dprintk("MLX90640_READ_ERROR\n");
             break;
         case MLX90640_READ_PAGE0:
-            printk(KERN_INFO "MLX90640_READ_PAGE0\n");
+            dprintk("MLX90640_READ_PAGE0\n");
             break;
         case MLX90640_READ_PAGE1:
-            printk(KERN_INFO "MLX90640_READ_PAGE1\n");
+            dprintk("MLX90640_READ_PAGE1\n");
             break;
         default:
             printk_mlx90640_retmsg(ret);
@@ -666,16 +683,16 @@ static int mlx90640_frame_mmap(struct file *file, struct vm_area_struct *vma)
     switch (ret)
     {
     case MLX90640_NO_ANSWER:
-        printk(KERN_INFO "MLX90640_NO_ANSWER\n");
+        dprintk("MLX90640_NO_ANSWER\n");
         break;
     case MLX90640_READ_ERROR:
-        printk(KERN_INFO "MLX90640_READ_ERROR\n");
+        dprintk("MLX90640_READ_ERROR\n");
         break;
     case MLX90640_READ_PAGE0:
-        printk(KERN_INFO "MLX90640_READ_PAGE0\n");
+        dprintk("MLX90640_READ_PAGE0\n");
         break;
     case MLX90640_READ_PAGE1:
-        printk(KERN_INFO "MLX90640_READ_PAGE1\n");
+        dprintk("MLX90640_READ_PAGE1\n");
         break;
     default:
         return -EIO;
@@ -693,7 +710,7 @@ static int mlx90640_frame_mmap(struct file *file, struct vm_area_struct *vma)
     ret = remap_pfn_range(vma, vma->vm_start, phy >> PAGE_SHIFT, vma->vm_end - vma->vm_start, vma->vm_page_prot);
     if (ret)
     {
-        printk("mmap remap_pfn_range failed\n");
+        dprintk("mmap remap_pfn_range failed\n");
         return -ENOBUFS;
     }
 
@@ -714,21 +731,19 @@ static const struct file_operations mlx90640_ops = {
 static int mlx90640_i2c_init(struct mlx90640_dev *pdev, uint16_t refresh_rate)
 {
     int ret;
-    // printk("Here is the MLX90640_I2CGeneralReset function.\n");
     // 发送复位命令
     ret = MLX90640_I2CGeneralReset(pdev->eeMLX90640);
     if (ret < 0)
     {
-        printk("MLX90640_I2CGeneralReset failed.\n");
+        dprintk("MLX90640_I2CGeneralReset failed.\n");
         return ret;
     }
 
-    // printk("Here is the MLX90640_SetRefreshRate function.\n");
     // 设置刷新率
     ret = MLX90640_SetRefreshRate(pdev->i2c_driver_test.client->addr, refresh_rate);
     if (ret < 0)
     {
-        printk("MLX90640_SetRefreshRate failed.\n");
+        dprintk("MLX90640_SetRefreshRate failed.\n");
         return ret;
     }
 
