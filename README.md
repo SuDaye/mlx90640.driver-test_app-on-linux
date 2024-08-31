@@ -6,6 +6,12 @@ https://github.com/melexis/mlx90640-library
 Hardware:
 正点原子ATK-DL6Y2C
 
+
+
+mlx90640-V4L2里是用v4l2实现的代码
+
+
+
 调用mmap将帧数据对应的内容映射到用户空间。通过ioctl系统调用实现了复位、更改刷新率、测量模式、测量分辨率和刷新帧数据的功能。
 获取传感器数据和发送指令都是通过I2C
 
